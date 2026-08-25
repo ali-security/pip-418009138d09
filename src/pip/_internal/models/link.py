@@ -11,14 +11,62 @@ from pip._internal.utils.misc import (
     splitext,
 )
 from pip._internal.utils.models import KeyBasedCompareMixin
-from pip._internal.utils.typing import MYPY_CHECK_RUNNING
+from pip._internal.utils.typing import MYPY_CHECK_RUNNING, cast
 from pip._internal.utils.urls import path_to_url, url_to_path
 
 if MYPY_CHECK_RUNNING:
-    from typing import Optional, Text, Tuple, Union
+    from typing import NewType, Optional, Text, Tuple, Union
 
     from pip._internal.index.collector import HTMLPage
     from pip._internal.utils.hashes import Hashes
+
+    # A single path component: percent-decoded once and reduced to a basename,
+    # so it contains no path separator and is not a ``.`` or ``..`` reference.
+    # The empty string means "no component".
+    PathComponent = NewType("PathComponent", str)
+
+
+def _to_path_component(name):
+    # type: (str) -> PathComponent
+    """Reduce ``name`` to a single path component, or ``""`` if it has none.
+
+    ``os.path.basename`` drops any directory part, drive letter, or separator;
+    a ``.``, ``..``, or empty result is not a component and becomes ``""``.
+    """
+    name = os.path.basename(name)
+    if name in ('', os.curdir, os.pardir):
+        return cast('PathComponent', '')
+
+    return cast('PathComponent', name)
+
+
+def as_path_component(name):
+    # type: (str) -> PathComponent
+    """Like ``_to_path_component`` but reject the empty result.
+
+    Use where a file is about to be written, so a missing name is an error
+    rather than a silent fallback to the directory itself.
+    """
+    component = _to_path_component(name)
+    if not component:
+        raise ValueError(
+            'Unexpected file name derived from URL: {!r}'.format(name)
+        )
+
+    return component
+
+
+def join_within_directory(directory, component):
+    # type: (str, PathComponent) -> str
+    """Join a single path ``component`` onto ``directory``.
+
+    ``component`` is a :data:`PathComponent`, so by type it has no separator
+    and is not a ``.`` or ``..`` reference; the result can never escape
+    ``directory``. Requiring ``PathComponent`` rather than ``str`` lets the
+    type checker enforce at the call site that the name was reduced to a safe
+    component beforehand.
+    """
+    return os.path.join(directory, component)
 
 
 class Link(KeyBasedCompareMixin):
@@ -104,19 +152,17 @@ class Link(KeyBasedCompareMixin):
 
     @property
     def filename(self):
-        # type: () -> str
-        path = self.path.rstrip('/')
-        name = posixpath.basename(path)
-        if not name:
-            # Make sure we don't leak auth information if the netloc
-            # includes a username and password.
-            netloc, user_pass = split_auth_from_netloc(self.netloc)
-            return netloc
+        # type: () -> PathComponent
+        # ``self.path`` already percent-decodes the URL path exactly once, so
+        # it must not be decoded again here: decoding twice would let a
+        # doubly-encoded separator collapse into a real path separator.
+        name = _to_path_component(posixpath.basename(self.path.rstrip('/')))
+        if name:
+            return name
 
-        name = urllib_parse.unquote(name)
-        assert name, (
-            'URL {self._url!r} produced no filename'.format(**locals()))
-        return name
+        # No component in the path; fall back to the netloc, dropping any auth
+        # so we don't leak a username and password.
+        return _to_path_component(split_auth_from_netloc(self.netloc)[0])
 
     @property
     def file_path(self):
