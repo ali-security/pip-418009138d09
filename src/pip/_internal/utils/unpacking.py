@@ -84,16 +84,26 @@ def has_leading_dir(paths):
     return True
 
 
-def is_within_directory(directory, target):
-    # type: ((Union[str, Text]), (Union[str, Text])) -> bool
+def is_within_directory(directory, target, resolve_symlinks=False):
+    # type: ((Union[str, Text]), (Union[str, Text]), bool) -> bool
     """
     Return true if the absolute path of target is within the directory
-    """
-    abs_directory = os.path.abspath(directory)
-    abs_target = os.path.abspath(target)
+    (including when target is equal to the directory).
 
-    prefix = os.path.commonprefix([abs_directory, abs_target])
-    return prefix == abs_directory
+    When ``resolve_symlinks`` is true, resolve symlinks before comparing so
+    traversal through a symlink (e.g. "link/../file") is also caught.
+    """
+    if resolve_symlinks:
+        abs_directory = os.path.realpath(directory)
+        abs_target = os.path.realpath(target)
+    else:
+        abs_directory = os.path.abspath(directory)
+        abs_target = os.path.abspath(target)
+
+    return (
+        abs_target == abs_directory or
+        abs_target.startswith(abs_directory + os.sep)
+    )
 
 
 def set_extracted_file_to_default_mode_plus_executable(path):
@@ -160,6 +170,22 @@ def unzip_file(filename, location, flatten=True):
         zipfp.close()
 
 
+def is_symlink_target_in_tar(tar, tarinfo):
+    # type: (tarfile.TarFile, tarfile.TarInfo) -> bool
+    """Check if the file pointed to by the symbolic link is in the tar
+    archive"""
+    linkname = os.path.join(os.path.dirname(tarinfo.name), tarinfo.linkname)
+
+    linkname = os.path.normpath(linkname)
+    linkname = linkname.replace('\\', '/')
+
+    try:
+        tar.getmember(linkname)
+        return True
+    except KeyError:
+        return False
+
+
 def untar_file(filename, location):
     # type: (str, str) -> None
     """
@@ -195,7 +221,13 @@ def untar_file(filename, location):
                 # https://github.com/python/mypy/issues/1174
                 fn = split_leading_dir(fn)[1]  # type: ignore
             path = os.path.join(location, fn)
-            if not is_within_directory(location, path):
+            # The plain check rejects textual ".." escapes; resolving symlinks
+            # also catches a later member redirected outside the destination
+            # by an earlier member's symlink (e.g. "link/../file").
+            if (
+                not is_within_directory(location, path) or
+                not is_within_directory(location, path, resolve_symlinks=True)
+            ):
                 message = (
                     'The tar file ({}) has a file ({}) trying to install '
                     'outside target directory ({})'
@@ -206,6 +238,27 @@ def untar_file(filename, location):
             if member.isdir():
                 ensure_dir(path)
             elif member.issym():
+                # Reject a symlink resolving outside the destination, so that
+                # a later member cannot be written through it.
+                target = os.path.join(os.path.dirname(path), member.linkname)
+                if not is_within_directory(
+                    location, target, resolve_symlinks=True
+                ):
+                    message = (
+                        'The tar file ({}) has a file ({}) trying to install '
+                        'outside target directory ({})'
+                    )
+                    raise InstallationError(
+                        message.format(filename, member.name, member.linkname)
+                    )
+                if not is_symlink_target_in_tar(tar, member):
+                    message = (
+                        'The tar file ({}) has a file ({}) trying to install '
+                        'outside target directory ({})'
+                    )
+                    raise InstallationError(
+                        message.format(filename, member.name, member.linkname)
+                    )
                 try:
                     # https://github.com/python/typeshed/issues/2673
                     tar._extract_member(member, path)  # type: ignore
