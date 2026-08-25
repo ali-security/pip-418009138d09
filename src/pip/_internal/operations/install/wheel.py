@@ -469,17 +469,47 @@ class MissingCallableSuffix(InstallationError):
         )
 
 
-def _raise_for_invalid_entrypoint(specification):
-    # type: (str) -> None
+def _script_within_dir(name, scripts_dir):
+    # type: (str, str) -> bool
+    """Return whether script ``name`` resolves to a path inside the
+    ``scripts_dir``.
+
+    distlib joins the entry point name onto the scripts directory, so a name
+    with path separators or ``..`` components can resolve elsewhere.
+    """
+    root = os.path.normpath(scripts_dir)
+    dest = os.path.normpath(os.path.join(scripts_dir, name))
+    return dest.startswith(root + os.sep)
+
+
+def _raise_for_invalid_entrypoint(specification, scripts_dir):
+    # type: (str, str) -> None
     entry = get_export_entry(specification)
-    if entry is not None and entry.suffix is None:
+    if entry is None:
+        return
+
+    if entry.suffix is None:
         raise MissingCallableSuffix(str(entry))
+
+    # The vendored distlib parses the entry point name with a character class
+    # that excludes path separators, so ``entry.name`` can be a truncated
+    # version of the name the wheel declared. Check the declared name as well,
+    # so a name that distlib would silently rewrite is rejected too.
+    declared_name = specification.split(' = ', 1)[0]
+    for name in (declared_name, entry.name):
+        if not _script_within_dir(name, scripts_dir):
+            raise InstallationError(
+                'Invalid script entry point name {!r}: the script would be '
+                'installed outside the scripts directory ({}).'.format(
+                    name, scripts_dir
+                )
+            )
 
 
 class PipScriptMaker(ScriptMaker):
     def make(self, specification, options=None):
         # type: (str, Dict[str, Any]) -> List[str]
-        _raise_for_invalid_entrypoint(specification)
+        _raise_for_invalid_entrypoint(specification, self.target_dir)
         return super(PipScriptMaker, self).make(specification, options)
 
 

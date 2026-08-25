@@ -488,6 +488,69 @@ class TestInstallUnpackedWheel(object):
         assert os.path.basename(wheel_path) in exc_text
         assert entrypoint in exc_text
 
+    @pytest.mark.parametrize(
+        "bad_name", ["../../outside", "..", "."]
+    )
+    @pytest.mark.parametrize(
+        "entry_point_type", ["console_scripts", "gui_scripts"]
+    )
+    def test_wheel_install_rejects_entry_point_path_traversal(
+        self, data, tmpdir, bad_name, entry_point_type
+    ):
+        """An entry point name with separators or ``..`` must not install a
+        script outside the scripts directory.
+        """
+        self.prep(data, tmpdir)
+        wheel_path = make_wheel(
+            "simple",
+            "0.1.0",
+            entry_points={
+                entry_point_type: ["{} = simple:main".format(bad_name)],
+            },
+        ).save_to_dir(tmpdir)
+        with pytest.raises(InstallationError) as e:
+            wheel.install_wheel(
+                "simple",
+                str(wheel_path),
+                scheme=self.scheme,
+                req_description="simple",
+            )
+
+        assert "outside the scripts directory" in str(e.value)
+        # Nothing was written outside the install destination.
+        assert not os.path.exists(os.path.join(str(tmpdir), "outside"))
+        assert not os.path.exists(
+            os.path.join(str(tmpdir), "dest", "outside")
+        )
+
+    @pytest.mark.parametrize(
+        "entry_point_type", ["console_scripts", "gui_scripts"]
+    )
+    def test_wheel_install_accepts_in_tree_entry_point_name(
+        self, data, tmpdir, entry_point_type
+    ):
+        """A name that stays inside the scripts directory is still installed.
+        """
+        self.prep(data, tmpdir)
+        wheel_path = make_wheel(
+            "simple",
+            "0.1.0",
+            entry_points={
+                entry_point_type: ["a/../inside = simple:main"],
+            },
+        ).save_to_dir(tmpdir)
+        wheel.install_wheel(
+            "simple",
+            str(wheel_path),
+            scheme=self.scheme,
+            req_description="simple",
+        )
+
+        # The script is installed, under a name inside the scripts directory.
+        # Windows appends an executable suffix to the generated launcher.
+        generated = os.listdir(self.scheme.scripts)
+        assert any(name.startswith('inside') for name in generated), generated
+
 
 class TestMessageAboutScriptsNotOnPATH(object):
 
@@ -670,3 +733,41 @@ class TestWheelHashCalculators(object):
         h, length = wheel.rehash(self.test_file)
         assert length == str(self.test_file_len)
         assert h == self.test_file_hash_encoded
+
+
+@pytest.mark.parametrize(
+    "name, within",
+    [
+        ("pip", True),
+        ("pip3.13", True),
+        ("foo-bar.baz", True),
+        ("...", True),  # a literal filename, not a path component
+        ("sub/script", True),  # in-tree subdirectory
+        ("a/../b", True),
+        ("sub\\script", True),  # backslash stays in-tree on POSIX and Windows
+        (" ../../inside", True),  # distlib keeps a leading space; in-tree
+        ("../outside", False),
+        ("../../outside", False),
+        ("a/../../outside", False),
+        ("/etc/cron.d/outside", False),  # absolute; os.path.join drops the root
+        # "." and ".." pass PyPI's [\w.-]+ name check but must be rejected here.
+        (".", False),
+        ("..", False),
+        ("", False),
+    ],
+)
+def test_script_within_dir(name, within):
+    assert wheel._script_within_dir(name, "/srv/env/bin") is within
+
+
+def test_script_within_dir_allows_doubled_slash_root():
+    # A scripts directory can have a doubled leading slash
+    assert wheel._script_within_dir("pip", "//srv/env/bin") is True
+    assert wheel._script_within_dir("../outside", "//srv/env/bin") is False
+
+
+@pytest.mark.skipif(not WINDOWS, reason="drive letters only matter on Windows")
+def test_script_within_dir_rejects_other_drive():
+    # Validate that a script on a different drive is rejected,
+    # and doesn't throw an error
+    assert wheel._script_within_dir("D:\\outside", "C:\\env\\bin") is False
