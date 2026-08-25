@@ -1,0 +1,3 @@
+**SECURITY**: Use ``--rev=...`` instead of a bare argument to specify
+references with Mercurial, so that a revision cannot be interpreted by
+``hg`` as a command line option.

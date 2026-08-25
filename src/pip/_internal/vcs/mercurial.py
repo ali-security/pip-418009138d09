@@ -38,7 +38,10 @@ class Mercurial(VersionControl):
 
     @staticmethod
     def get_base_rev_args(rev):
-        return [rev]
+        # Pass the revision glued to the option name, as a single argument,
+        # so that a revision starting with a hyphen can never be mistaken by
+        # hg for an option of its own.
+        return ['--rev={}'.format(rev)]
 
     def export(self, location, url):
         # type: (str, HiddenText) -> None

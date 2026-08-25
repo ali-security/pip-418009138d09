@@ -53,7 +53,7 @@ def test_rev_options_repr():
     # First check VCS-specific RevOptions behavior.
     (Bazaar, [], ['-r', '123'], {}),
     (Git, ['HEAD'], ['123'], {}),
-    (Mercurial, [], ['123'], {}),
+    (Mercurial, [], ['--rev=123'], {}),
     (Subversion, [], ['-r', '123'], {}),
     # Test extra_args.  For this, test using a single VersionControl class.
     (Git, ['HEAD', 'opt1', 'opt2'], ['123', 'opt1', 'opt2'],
@@ -65,6 +65,39 @@ def test_rev_options_to_args(vc_class, expected1, expected2, kwargs):
     """
     assert RevOptions(vc_class, **kwargs).to_args() == expected1
     assert RevOptions(vc_class, '123', **kwargs).to_args() == expected2
+
+
+@pytest.mark.parametrize('rev', [
+    # A revision that hg would otherwise consume as an option of its own.
+    '--config=alias.clone=!touch owned',
+    '--config=extensions.evil=evil.py',
+    '--debugger',
+    '-R',
+    '-r',
+])
+def test_mercurial_rev_options_no_option_injection(rev):
+    """
+    Test that a Mercurial revision cannot be smuggled in as an hg option.
+
+    Passing the revision as its own argv element let a malicious
+    requirement inject arbitrary ``hg`` command line options, and thereby
+    execute arbitrary code (CVE-2023-5752).
+    """
+    args = RevOptions(Mercurial, rev).to_args()
+    # The revision is glued to the option name, so hg sees a single
+    # argument and parses all of it as the value of --rev.
+    assert args == ['--rev={}'.format(rev)]
+    assert len(args) == 1
+    assert rev not in args
+
+
+def test_mercurial_get_base_rev_args_uses_long_option():
+    """
+    Test that Mercurial uses ``--rev=``, and not the ambiguous ``-r=``.
+
+    ``hg`` reads ``-r=123`` as the revision literally named ``=123``.
+    """
+    assert Mercurial.get_base_rev_args('123') == ['--rev=123']
 
 
 def test_rev_options_to_display():
