@@ -302,33 +302,48 @@ def unpack_file(
         content_type=None,  # type: Optional[str]
 ):
     # type: (...) -> None
+    """Unpack ``filename`` into ``location``.
+
+    Archive format is chosen in order of decreasing reliability:
+    ``content_type``, then filename extension, then magic signature
+    (unambiguous matches only).
+    """
     filename = os.path.realpath(filename)
-    if (
-        content_type == 'application/zip' or
-        filename.lower().endswith(ZIP_EXTENSIONS) or
-        zipfile.is_zipfile(filename)
-    ):
-        unzip_file(
-            filename,
-            location,
-            flatten=not filename.endswith('.whl')
-        )
-    elif (
-        content_type == 'application/x-gzip' or
-        tarfile.is_tarfile(filename) or
-        filename.lower().endswith(
-            TAR_EXTENSIONS + BZ2_EXTENSIONS + XZ_EXTENSIONS
-        )
+    zip_flatten = not filename.endswith('.whl')
+
+    if content_type == 'application/zip':
+        unzip_file(filename, location, flatten=zip_flatten)
+        return
+    if content_type == 'application/x-gzip':
+        untar_file(filename, location)
+        return
+
+    if filename.lower().endswith(ZIP_EXTENSIONS):
+        unzip_file(filename, location, flatten=zip_flatten)
+        return
+    if filename.lower().endswith(
+        TAR_EXTENSIONS + BZ2_EXTENSIONS + XZ_EXTENSIONS
     ):
         untar_file(filename, location)
-    else:
-        # FIXME: handle?
-        # FIXME: magic signatures?
-        logger.critical(
-            'Cannot unpack file %s (downloaded from %s, content-type: %s); '
-            'cannot detect archive format',
-            filename, location, content_type,
-        )
-        raise InstallationError(
-            'Cannot determine archive format of {}'.format(location)
-        )
+        return
+
+    # avoid ambiguous case where both signature checks return True
+    is_zipfile = zipfile.is_zipfile(filename)
+    is_tarfile = tarfile.is_tarfile(filename)
+    if is_zipfile and not is_tarfile:
+        unzip_file(filename, location, flatten=zip_flatten)
+        return
+    if is_tarfile and not is_zipfile:
+        untar_file(filename, location)
+        return
+    if is_zipfile and is_tarfile:
+        logger.error('Ambiguous file signature in %s.', filename)
+
+    logger.critical(
+        'Cannot unpack file %s (downloaded from %s, content-type: %s); '
+        'cannot detect archive format',
+        filename, location, content_type,
+    )
+    raise InstallationError(
+        'Cannot determine archive format of {}'.format(location)
+    )

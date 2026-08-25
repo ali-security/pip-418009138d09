@@ -42,9 +42,40 @@ jobs:
         path: ~/.cache/pre-commit
         key: pre-commit|2020-02-14|${{ env.PY }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
-    # Get the latest tox
     - name: Install tox
-      run: python -m pip install tox
+      # tox 3: tox.ini uses `whitelist_externals` (renamed in tox 4), and only
+      # tox 3 carries PIP_INDEX_URL in its default passenv -- that passthrough
+      # is what puts pre-commit's own hook installs on the release-date index.
+      # Release-date index, scoped to this step: at job level it also reaches
+      # setup-python's internal `pip install --upgrade pip`, which downgrades
+      # the runner's own pip in place and leaves a broken hybrid install
+      # (ImportError: InvalidSchemeCombination). Only project dependency
+      # resolution belongs on the snapshot.
+      env:
+        PIP_INDEX_URL: https://:2021-01-23T12%3A58%3A09.936803Z@time-machines-pypi.sealsecurity.io/
+      # setuptools<52 (51.3.3 in the snapshot) pairs with the packaging 20.8
+      # that tox 3 resolves: a present-day setuptools calls
+      # canonicalize_version(strip_trailing_zero=...), which packaging<22 has
+      # no such keyword for, so `setup.py sdist` dies in tox's sdist-make.
+      run: python -m pip install 'tox<4' 'setuptools<52'
 
     # Main check
-    - run: python -m tox
+    - name: Run lint, docs and vendoring
+      # Release-date index, scoped to this step for the same reason as above.
+      # Off the snapshot, pre-commit builds the isort 5.5.3 hook with a
+      # present-day poetry-core, which rejects that release's pyproject.toml
+      # ("tool.poetry.extras.pipfile_deprecated_finder[2] must match pattern"),
+      # and the docs env's dependency resolution backtracks until the job
+      # hits its timeout.
+      env:
+        PIP_INDEX_URL: https://:2021-01-23T12%3A58%3A09.936803Z@time-machines-pypi.sealsecurity.io/
+        # black 20.8b1 imports typed_ast unconditionally, and the 1.4.x the
+        # snapshot offers links CPython private symbols that later 3.9 patch
+        # releases dropped -- on this job's Windows 3.9.13 the hook dies with
+        # "DLL load failed while importing _ast3". .pre-commit-config.yaml
+        # already pins the fixed 1.5.5 for Linux/3.9 by direct URL; pointing
+        # find-links at that project's simple page lets every platform's hook
+        # install reach 1.5.5 without opening the whole index up to today.
+        # mypy 0.790 caps typed_ast at <1.5.0, so its hook still gets 1.4.x.
+        PIP_FIND_LINKS: https://pypi.org/simple/typed-ast/
+      run: python -m tox
