@@ -4,6 +4,7 @@ from unittest import TestCase
 import pytest
 from mock import patch
 from pip._vendor.packaging.version import parse as parse_version
+from pip._vendor.six import unichr
 
 from pip._internal.exceptions import BadCommand, InstallationError
 from pip._internal.utils.misc import hide_url, hide_value
@@ -199,6 +200,112 @@ def test_git_is_commit_id_equal(mock_get_revision, rev_name, result):
     """
     mock_get_revision.return_value = '5547fa909e83df8bd743d3978d6667497983a4b7'
     assert Git.is_commit_id_equal('/path', rev_name) is result
+
+
+@pytest.mark.parametrize('ref_prefix, is_branch', [
+    ('refs/tags/', False),
+    ('refs/remotes/origin/', True),
+])
+@patch('pip._internal.vcs.git.Git.run_command')
+def test_git_get_revision_sha(mock_run_command, ref_prefix, is_branch):
+    """
+    Test Git.get_revision_sha() against ordinary show-ref output.
+    """
+    expected_sha = 40 * 'a'
+    mock_run_command.return_value = '{} {}v1.0\n'.format(
+        expected_sha, ref_prefix,
+    )
+    assert Git.get_revision_sha('.', 'v1.0') == (expected_sha, is_branch)
+
+
+@patch('pip._internal.vcs.git.Git.run_command')
+def test_git_get_revision_sha__no_matching_ref(mock_run_command):
+    """
+    Test Git.get_revision_sha() when show-ref matched nothing.  The empty
+    string a newline split yields for empty output must not be parsed as a
+    ref line.
+    """
+    mock_run_command.return_value = ''
+    assert Git.get_revision_sha('.', 'v1.0') == (None, False)
+
+
+@patch('pip._internal.vcs.git.Git.run_command')
+def test_git_get_revision_sha__crlf_line_endings(mock_run_command):
+    """
+    Test Git.get_revision_sha() with Windows-style line endings.  Unless the
+    carriage return is stripped, every ref but the last one is keyed under a
+    name with a trailing carriage return, and so never matches.
+    """
+    expected_sha = 40 * 'a'
+    mock_run_command.return_value = (
+        '{} refs/remotes/origin/v1.0\r\n'
+        '{} refs/tags/v1.0\r\n'.format(expected_sha, 40 * 'b')
+    )
+    assert Git.get_revision_sha('.', 'v1.0') == (expected_sha, True)
+
+
+# Characters that str.splitlines() treats as line boundaries, unlike a plain
+# split on a newline.  git only allows the non-ASCII ones inside a ref name,
+# but the parser must not split on any of them.  They are built with unichr()
+# on purpose: this file has no encoding declaration, so it must stay ASCII to
+# import on Python 2.
+@pytest.mark.parametrize('separator', [
+    pytest.param(unichr(0x2028), id='line-separator'),
+    pytest.param(unichr(0x2029), id='paragraph-separator'),
+    pytest.param(unichr(0x0085), id='next-line'),
+    pytest.param(unichr(0x000B), id='line-tabulation'),
+    pytest.param(unichr(0x000C), id='form-feed'),
+    pytest.param(unichr(0x001C), id='file-separator'),
+    pytest.param(unichr(0x001D), id='group-separator'),
+    pytest.param(unichr(0x001E), id='record-separator'),
+])
+@pytest.mark.parametrize('ref_prefix, is_branch', [
+    ('refs/tags/', False),
+    ('refs/remotes/origin/', True),
+])
+@patch('pip._internal.vcs.git.Git.run_command')
+def test_git_get_revision_sha__no_line_injection_via_ref_name(
+    mock_run_command, ref_prefix, is_branch, separator
+):
+    """
+    Test Git.get_revision_sha() against a ref name embedding a fake show-ref
+    line (CVE-2021-3572).
+
+    git accepts a separator like U+2028 inside a ref name, and the name's
+    last "/"-separated component still matches the requested rev, so
+    ``git show-ref v1.0`` lists it.  Splitting the output with splitlines()
+    turned the tail of that name into an extra entry, which overwrote the
+    legitimate one and installed the attacker's revision instead.
+    """
+    expected_sha = 40 * 'a'
+    attacker_sha = 40 * 'b'
+    target_ref = '{}v1.0'.format(ref_prefix)
+    # The fields of the smuggled entry are separated by U+2003 EM SPACE: git
+    # rejects a plain space in a ref name, but str.split() with no argument
+    # splits on any unicode whitespace just the same.
+    smuggled_ref = u'{}evil{}{}{}{}'.format(
+        ref_prefix, separator, attacker_sha, unichr(0x2003), target_ref,
+    )
+    mock_run_command.return_value = u'{} {}\n{} {}\n'.format(
+        expected_sha, target_ref, 40 * 'c', smuggled_ref,
+    )
+
+    assert Git.get_revision_sha('.', 'v1.0') == (expected_sha, is_branch)
+
+
+@patch('pip._internal.vcs.git.Git.run_command')
+def test_git_get_revision_sha__extra_field_is_rejected(mock_run_command):
+    """
+    Test Git.get_revision_sha() fails closed on a show-ref line carrying an
+    extra space-separated field, rather than silently using part of it.
+    """
+    mock_run_command.return_value = '{} refs/tags/v1.0 {}\n'.format(
+        40 * 'a', 40 * 'b',
+    )
+    with pytest.raises(ValueError) as excinfo:
+        Git.get_revision_sha('.', 'v1.0')
+
+    assert 'unexpected show-ref line' in str(excinfo.value)
 
 
 # The non-SVN backends all use the same get_netloc_and_auth(), so only test
