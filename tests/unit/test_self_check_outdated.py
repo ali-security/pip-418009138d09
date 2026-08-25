@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import os
 import sys
 
@@ -12,7 +13,8 @@ from pip._internal.models.candidate import InstallationCandidate
 from pip._internal.self_outdated_check import (
     SelfCheckState,
     logger,
-    pip_self_version_check,
+    pip_self_version_check_emit,
+    pip_self_version_check_fetch,
 )
 from tests.lib.path import Path
 
@@ -59,7 +61,7 @@ class MockDistribution(object):
 
 def _options():
     ''' Some default options that we pass to
-    self_outdated_check.pip_self_version_check '''
+    self_outdated_check.pip_self_version_check_fetch '''
     return pretend.stub(
         find_links=[], index_url='default_url', extra_index_urls=[],
         no_index=False, pre=False, cache_dir='',
@@ -116,11 +118,14 @@ def test_pip_self_version_check(monkeypatch, stored_time, installed_ver,
             "pip._vendor.requests.packages.urllib3.packages.six.moves",
         ]
     ):
-        latest_pypi_version = pip_self_version_check(None, _options())
+        upgrade_prompt = pip_self_version_check_fetch(None, _options())
+
+    # The fetch half never talks to the user.
+    assert len(logger.warning.calls) == 0
 
     # See we return None if not installed_version
     if not installed_ver:
-        assert not latest_pypi_version
+        assert upgrade_prompt is None
     # See that we saved the correct version
     elif check_if_upgrade_required:
         assert fake_state.save.calls == [
@@ -132,11 +137,81 @@ def test_pip_self_version_check(monkeypatch, stored_time, installed_ver,
         # See that save was not called
         assert fake_state.save.calls == []
 
+    # Only the emit half writes anything out, and it only ever formats the
+    # values the fetch half already computed.
+    if check_warn_logs:
+        assert upgrade_prompt == (installed_ver, new_ver)
+    else:
+        assert upgrade_prompt is None
+
+    pip_self_version_check_emit(upgrade_prompt)
+
     # Ensure we warn the user or not
     if check_warn_logs:
         assert len(logger.warning.calls) == 1
     else:
         assert len(logger.warning.calls) == 0
+
+
+def _self_check_records(caplog):
+    return [r for r in caplog.records if r.name == logger.name]
+
+
+def test_pip_self_version_check_emit_no_prompt_is_silent(caplog):
+    """``None`` means "nothing to say" -- emit must stay quiet."""
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        pip_self_version_check_emit(None)
+
+    assert _self_check_records(caplog) == []
+
+
+def test_pip_self_version_check_emit_logs_a_single_warning(caplog):
+    """A prompt is rendered with exactly the message pip has always used."""
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        pip_self_version_check_emit(('1.0', '6.9.0'))
+
+    records = _self_check_records(caplog)
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert records[0].getMessage() == (
+        "You are using pip version 1.0; however, version 6.9.0 is "
+        "available.\nYou should consider upgrading via the "
+        "'{} -m pip install --upgrade pip' command.".format(sys.executable)
+    )
+
+
+def test_pip_self_version_check_emit_does_no_work(monkeypatch):
+    """The emit half must not re-read anything from the environment.
+
+    Everything the check needs is gathered before the command body runs, so
+    that a command which just replaced pip's own files on disk cannot make
+    the check load and execute its code.
+    """
+    def explode(*args, **kwargs):
+        raise AssertionError("emit must not touch the environment")
+
+    monkeypatch.setattr(self_outdated_check, 'get_installed_version', explode)
+    monkeypatch.setattr(self_outdated_check, 'get_distribution', explode)
+    monkeypatch.setattr(self_outdated_check, 'was_installed_by_pip', explode)
+    monkeypatch.setattr(self_outdated_check, 'SelfCheckState', explode)
+    monkeypatch.setattr(self_outdated_check, 'LinkCollector', explode)
+    monkeypatch.setattr(self_outdated_check, 'PackageFinder', explode)
+
+    pip_self_version_check_emit(('1.0', '6.9.0'))
+    pip_self_version_check_emit(None)
+
+
+def test_pip_self_version_check_fetch_swallows_errors(monkeypatch):
+    """A broken index must not break the command that triggered the check."""
+    monkeypatch.setattr(self_outdated_check, 'get_installed_version',
+                        lambda name: '1.0')
+
+    def explode(*args, **kwargs):
+        raise ValueError('nope')
+
+    monkeypatch.setattr(self_outdated_check, 'SelfCheckState', explode)
+
+    assert pip_self_version_check_fetch(None, _options()) is None
 
 
 statefile_name_case_1 = (

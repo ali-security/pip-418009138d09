@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import os
 
@@ -86,14 +87,80 @@ class TestCommand(object):
         assert 'Traceback (most recent call last):' in stderr
 
 
-@patch('pip._internal.cli.req_command.Command.handle_pip_version_check')
-def test_handle_pip_version_check_called(mock_handle_version_check):
+@patch('pip._internal.cli.req_command.Command.pip_version_check')
+def test_pip_version_check_called(mock_version_check):
     """
-    Check that Command.handle_pip_version_check() is called.
+    Check that Command.pip_version_check() is called.
     """
     cmd = FakeCommand()
     cmd.main([])
-    mock_handle_version_check.assert_called_once()
+    mock_version_check.assert_called_once()
+
+
+def test_pip_version_check_wraps_the_command_body():
+    """
+    Check that Command.pip_version_check() *wraps* the command body.
+
+    The whole point of the fix for the self-check code injection is that all
+    of the check's work happens before the command runs, so that a command
+    which overwrites pip's own files on disk cannot get that code executed
+    by the check afterwards.
+    """
+    calls = []
+
+    class RecordingCommand(FakeCommand):
+        @contextlib.contextmanager
+        def pip_version_check(self, options, args):
+            calls.append('fetch')
+            try:
+                yield
+            finally:
+                calls.append('emit')
+
+    cmd = RecordingCommand(run_func=lambda: calls.append('body') or SUCCESS)
+    assert cmd.main([]) == SUCCESS
+    assert calls == ['fetch', 'body', 'emit']
+
+
+def test_pip_version_check_emits_even_when_the_command_fails():
+    """
+    A failing command body must still reach the emit half of the check.
+    """
+    calls = []
+
+    class RecordingCommand(FakeCommand):
+        @contextlib.contextmanager
+        def pip_version_check(self, options, args):
+            calls.append('fetch')
+            try:
+                yield
+            finally:
+                calls.append('emit')
+
+    def explode():
+        raise SystemExit(1)
+
+    cmd = RecordingCommand(run_func=explode)
+    cmd.main([])
+    assert calls == ['fetch', 'emit']
+
+
+def test_pip_version_check_receives_the_command_arguments():
+    """
+    ``pip_version_check()`` is handed the command's positional arguments, so
+    that ``pip install pip`` can opt out of the check.
+    """
+    seen = []
+
+    class RecordingCommand(FakeCommand):
+        @contextlib.contextmanager
+        def pip_version_check(self, options, args):
+            seen.append(list(args))
+            yield
+
+    cmd = RecordingCommand()
+    cmd.main(['some-argument'])
+    assert seen == [['some-argument']]
 
 
 def test_log_command_success(fixed_time, tmpdir):

@@ -2,6 +2,7 @@
 
 from __future__ import absolute_import, print_function
 
+import contextlib
 import logging
 import logging.config
 import optparse
@@ -39,7 +40,7 @@ from pip._internal.utils.virtualenv import running_under_virtualenv
 
 if MYPY_CHECK_RUNNING:
     from optparse import Values
-    from typing import Any, List, Optional, Tuple
+    from typing import Any, Iterator, List, Optional, Tuple
 
     from pip._internal.utils.temp_dir import (
         TempDirectoryTypeRegistry as TempDirRegistry,
@@ -90,8 +91,9 @@ class Command(CommandContextMixIn):
         # type: () -> None
         pass
 
-    def handle_pip_version_check(self, options):
-        # type: (Values) -> None
+    @contextlib.contextmanager
+    def pip_version_check(self, options, args):
+        # type: (Values, List[str]) -> Iterator[None]
         """
         This is a no-op so that commands by default do not do the pip version
         check.
@@ -99,6 +101,7 @@ class Command(CommandContextMixIn):
         # Make sure we do the pip version check if the index_group options
         # are present.
         assert not hasattr(options, 'no_index')
+        yield
 
     def run(self, options, args):
         # type: (Values, List[Any]) -> int
@@ -219,42 +222,45 @@ class Command(CommandContextMixIn):
                 "This will become an error in pip 21.0."
             )
 
-        try:
-            status = self.run(options, args)
-            assert isinstance(status, int)
-            return status
-        except PreviousBuildDirError as exc:
-            logger.critical(str(exc))
-            logger.debug('Exception information:', exc_info=True)
+        # Everything the pip version check needs is gathered *before* the
+        # command body runs, and only the (already computed) result is
+        # displayed afterwards. Doing the work afterwards would mean running
+        # it against files the command itself may just have replaced.
+        with self.pip_version_check(options, args):
+            try:
+                status = self.run(options, args)
+                assert isinstance(status, int)
+                return status
+            except PreviousBuildDirError as exc:
+                logger.critical(str(exc))
+                logger.debug('Exception information:', exc_info=True)
 
-            return PREVIOUS_BUILD_DIR_ERROR
-        except (InstallationError, UninstallationError, BadCommand,
-                NetworkConnectionError) as exc:
-            logger.critical(str(exc))
-            logger.debug('Exception information:', exc_info=True)
+                return PREVIOUS_BUILD_DIR_ERROR
+            except (InstallationError, UninstallationError, BadCommand,
+                    NetworkConnectionError) as exc:
+                logger.critical(str(exc))
+                logger.debug('Exception information:', exc_info=True)
 
-            return ERROR
-        except CommandError as exc:
-            logger.critical('%s', exc)
-            logger.debug('Exception information:', exc_info=True)
+                return ERROR
+            except CommandError as exc:
+                logger.critical('%s', exc)
+                logger.debug('Exception information:', exc_info=True)
 
-            return ERROR
-        except BrokenStdoutLoggingError:
-            # Bypass our logger and write any remaining messages to stderr
-            # because stdout no longer works.
-            print('ERROR: Pipe to stdout was broken', file=sys.stderr)
-            if level_number <= logging.DEBUG:
-                traceback.print_exc(file=sys.stderr)
+                return ERROR
+            except BrokenStdoutLoggingError:
+                # Bypass our logger and write any remaining messages to
+                # stderr because stdout no longer works.
+                print('ERROR: Pipe to stdout was broken', file=sys.stderr)
+                if level_number <= logging.DEBUG:
+                    traceback.print_exc(file=sys.stderr)
 
-            return ERROR
-        except KeyboardInterrupt:
-            logger.critical('Operation cancelled by user')
-            logger.debug('Exception information:', exc_info=True)
+                return ERROR
+            except KeyboardInterrupt:
+                logger.critical('Operation cancelled by user')
+                logger.debug('Exception information:', exc_info=True)
 
-            return ERROR
-        except BaseException:
-            logger.critical('Exception:', exc_info=True)
+                return ERROR
+            except BaseException:
+                logger.critical('Exception:', exc_info=True)
 
-            return UNKNOWN_ERROR
-        finally:
-            self.handle_pip_version_check(options)
+                return UNKNOWN_ERROR

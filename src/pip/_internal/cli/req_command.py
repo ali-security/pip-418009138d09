@@ -5,6 +5,7 @@ needing download / PackageFinder capability don't unnecessarily import the
 PackageFinder machinery and all its vendored dependencies, etc.
 """
 
+import contextlib
 import logging
 import os
 from functools import partial
@@ -27,13 +28,16 @@ from pip._internal.req.constructors import (
     install_req_from_req_string,
 )
 from pip._internal.req.req_file import parse_requirements
-from pip._internal.self_outdated_check import pip_self_version_check
+from pip._internal.self_outdated_check import (
+    pip_self_version_check_emit,
+    pip_self_version_check_fetch,
+)
 from pip._internal.utils.temp_dir import tempdir_kinds
 from pip._internal.utils.typing import MYPY_CHECK_RUNNING
 
 if MYPY_CHECK_RUNNING:
     from optparse import Values
-    from typing import Any, List, Optional, Tuple
+    from typing import Any, Iterator, List, Optional, Tuple
 
     from pip._internal.cache import WheelCache
     from pip._internal.models.target_python import TargetPython
@@ -122,6 +126,21 @@ class SessionCommandMixin(CommandContextMixIn):
         return session
 
 
+# Thin indirections over pip._internal.self_outdated_check, so that the two
+# halves of the check can be swapped out in tests. Note that the module they
+# delegate to is imported at the top of this one, on purpose: everything the
+# version check needs must already be loaded before a command body gets the
+# chance to overwrite pip's own files on disk.
+def _pip_self_version_check_fetch(session, options):
+    # type: (PipSession, Values) -> Optional[Tuple[str, str]]
+    return pip_self_version_check_fetch(session, options)
+
+
+def _pip_self_version_check_emit(upgrade_prompt):
+    # type: (Optional[Tuple[str, str]]) -> None
+    pip_self_version_check_emit(upgrade_prompt)
+
+
 class IndexGroupCommand(Command, SessionCommandMixin):
 
     """
@@ -130,27 +149,54 @@ class IndexGroupCommand(Command, SessionCommandMixin):
     This also corresponds to the commands that permit the pip version check.
     """
 
-    def handle_pip_version_check(self, options):
-        # type: (Values) -> None
+    @contextlib.contextmanager
+    def pip_version_check(self, options, args):
+        # type: (Values, List[str]) -> Iterator[None]
         """
         Do the pip version check if not disabled.
 
         This overrides the default behavior of not doing the check.
+
+        Everything the check needs -- reading the state file, contacting the
+        index and comparing versions -- happens before the command body runs.
+        Only the resulting message is emitted afterwards, so that a command
+        which replaces pip's own files on disk cannot get its code executed
+        by, or influence the outcome of, the version check.
         """
         # Make sure the index_group options are present.
         assert hasattr(options, 'no_index')
 
         if options.disable_pip_version_check or options.no_index:
+            yield
             return
 
-        # Otherwise, check if we're using the latest version of pip available.
-        session = self._build_session(
-            options,
-            retries=0,
-            timeout=min(5, options.timeout)
-        )
-        with session:
-            pip_self_version_check(session, options)
+        upgrade_prompt = None  # type: Optional[Tuple[str, str]]
+        try:
+            # Otherwise, check if we're using the latest version of pip
+            # available.
+            session = self._build_session(
+                options,
+                retries=0,
+                timeout=min(5, options.timeout)
+            )
+            with session:
+                upgrade_prompt = _pip_self_version_check_fetch(session, options)
+        except Exception:
+            logger.warning(
+                "There was an error checking the latest version of pip."
+            )
+            logger.debug("See below for error", exc_info=True)
+
+        try:
+            yield
+        finally:
+            try:
+                _pip_self_version_check_emit(upgrade_prompt)
+            except Exception:
+                logger.warning(
+                    "There was an error checking the latest version of pip."
+                )
+                logger.debug("See below for error", exc_info=True)
 
 
 KEEPABLE_TEMPDIR_TYPES = [

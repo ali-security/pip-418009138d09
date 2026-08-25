@@ -20,7 +20,7 @@ from pip._internal.utils.typing import MYPY_CHECK_RUNNING
 
 if MYPY_CHECK_RUNNING:
     import optparse
-    from typing import Any, Dict, Text, Union
+    from typing import Any, Dict, Optional, Text, Tuple, Union
 
     from pip._internal.network.session import PipSession
 
@@ -111,17 +111,26 @@ def was_installed_by_pip(pkg):
     return "pip" == get_installer(dist)
 
 
-def pip_self_version_check(session, options):
-    # type: (PipSession, optparse.Values) -> None
-    """Check for an update for pip.
+def pip_self_version_check_fetch(session, options):
+    # type: (PipSession, optparse.Values) -> Optional[Tuple[str, str]]
+    """Check for an update for pip, without displaying anything.
 
     Limit the frequency of checks to once per week. State is stored either in
     the active virtualenv or in the user's USER_CACHE_DIR keyed off the prefix
     of the pip script path.
+
+    This performs every side effect of the check -- reading the state file,
+    talking to the index and comparing versions -- and returns the
+    ``(installed_version, available_version)`` pair that should be shown to
+    the user, or None when there is nothing to show.
+
+    It is deliberately kept separate from :func:`pip_self_version_check_emit`,
+    so that all of this work can happen *before* a command runs, rather than
+    after a command has potentially replaced pip's own files on disk.
     """
     installed_version = get_installed_version("pip")
     if not installed_version:
-        return
+        return None
 
     pip_version = packaging_version.parse(installed_version)
     pypi_version = None
@@ -161,7 +170,7 @@ def pip_self_version_check(session, options):
             )
             best_candidate = finder.find_best_candidate("pip").best_candidate
             if best_candidate is None:
-                return
+                return None
             pypi_version = str(best_candidate.version)
 
             # save that we've performed a check
@@ -177,21 +186,38 @@ def pip_self_version_check(session, options):
 
         # Determine if our pypi_version is older
         if not local_version_is_older:
-            return
+            return None
 
-        # We cannot tell how the current pip is available in the current
-        # command context, so be pragmatic here and suggest the command
-        # that's always available. This does not accommodate spaces in
-        # `sys.executable`.
-        pip_cmd = "{} -m pip".format(sys.executable)
-        logger.warning(
-            "You are using pip version %s; however, version %s is "
-            "available.\nYou should consider upgrading via the "
-            "'%s install --upgrade pip' command.",
-            pip_version, pypi_version, pip_cmd
-        )
+        return (str(pip_version), pypi_version)
     except Exception:
         logger.debug(
             "There was an error checking the latest version of pip",
             exc_info=True,
         )
+        return None
+
+
+def pip_self_version_check_emit(upgrade_prompt):
+    # type: (Optional[Tuple[str, str]]) -> None
+    """Display the result computed by :func:`pip_self_version_check_fetch`.
+
+    This only logs an already-computed value, so that nothing which a command
+    may have just installed can influence -- or be executed by -- the version
+    check.
+    """
+    if upgrade_prompt is None:
+        return
+
+    pip_version, pypi_version = upgrade_prompt
+
+    # We cannot tell how the current pip is available in the current
+    # command context, so be pragmatic here and suggest the command
+    # that's always available. This does not accommodate spaces in
+    # `sys.executable`.
+    pip_cmd = "{} -m pip".format(sys.executable)
+    logger.warning(
+        "You are using pip version %s; however, version %s is "
+        "available.\nYou should consider upgrading via the "
+        "'%s install --upgrade pip' command.",
+        pip_version, pypi_version, pip_cmd
+    )

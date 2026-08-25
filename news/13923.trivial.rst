@@ -1,0 +1,4 @@
+**SECURITY**: Split the pip self-version check into a fetch phase that runs
+before the command body and an emit phase that only displays the already
+computed result afterwards, and skip the check entirely when pip itself is
+one of the requirements being installed.
