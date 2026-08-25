@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import textwrap
 
 import pytest
@@ -361,6 +362,14 @@ def test_constraints_local_editable_install_causes_error(
         assert 'No matching distribution found' in result.stderr, str(result)
 
 
+@pytest.mark.skipif(
+    sys.version_info >= (3, 7),
+    reason="downloads a present-day setuptools/wheel and builds the editable "
+           "PEP 518 project with it; the modern setuptools no longer produces "
+           "the artifact names this test resolves against.  The "
+           "2.7/3.5/3.6/pypy legs resolve the era's setuptools and still run "
+           "it",
+)
 @pytest.mark.network
 def test_constraints_local_editable_install_pep518(script, data):
     to_install = data.src.joinpath("pep518-3.0")

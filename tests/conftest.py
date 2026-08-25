@@ -31,6 +31,15 @@ if MYPY_CHECK_RUNNING:
     from tests.lib.server import Responder
 
 
+# Seal: tox/CI sets PIP_INDEX_URL et al so the release-date index is used when
+# installing deps; tests/unit/test_configuration.py asserts on pip's own PIP_*
+# env handling, so strip the whole namespace once deps are installed.  tox has
+# already built the test env by the time conftest is imported, so this is safe,
+# and it covers both in_memory_pip and inherited subprocesses.
+for _key in [k for k in os.environ if k.startswith("PIP_")]:
+    del os.environ[_key]
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--keep-tmpdir",
@@ -239,11 +248,31 @@ def isolate(tmpdir, monkeypatch):
     # Make sure tests don't share a requirements tracker.
     monkeypatch.delenv("PIP_REQ_TRACKER", False)
 
+    # Seal: this fixture redirects HOME and sets GIT_CONFIG_NOSYSTEM, so a
+    # `git config --global` done by CI is invisible in here.  These two
+    # settings are required for the VCS tests to work on current git/Windows,
+    # so inject them through GIT_CONFIG_* env vars, which reach git on both
+    # POSIX (where the file below is found) and Windows (where it is not --
+    # see the FIXME).
+    #   protocol.file.allow=always -- the fix for git CVE-2022-39253 blocks
+    #     file:// submodule clones, which the submodule VCS tests rely on.
+    #   core.longpaths=true -- on Windows the pytest tmpdir plus
+    #     "pip-install-XXXX" plus ".git/objects/pack/pack-<40hex>.keep"
+    #     crosses MAX_PATH (260) and the clone dies as
+    #     "No matching distribution found".
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "core.longpaths")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "true")
+
     # FIXME: Windows...
     os.makedirs(os.path.join(home_dir, ".config", "git"))
     with open(os.path.join(home_dir, ".config", "git", "config"), "wb") as fp:
         fp.write(
             b"[user]\n\tname = pip\n\temail = distutils-sig@python.org\n"
+            b"[protocol \"file\"]\n\tallow = always\n"
+            b"[core]\n\tlongpaths = true\n"
         )
 
 

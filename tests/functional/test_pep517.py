@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from pip._vendor import toml
 
@@ -254,6 +256,13 @@ def test_explicit_setuptools_backend(script, tmpdir, data, common_wheels):
     result.assert_installed(name, editable=False)
 
 
+@pytest.mark.skipif(
+    sys.version_info >= (3, 7),
+    reason="asserts on the wording a present-day setuptools emits for "
+           "--build-option; that message changed upstream.  The "
+           "2.7/3.5/3.6/pypy legs resolve the era's setuptools and still run "
+           "it",
+)
 @pytest.mark.network
 @windows_workaround_7667
 def test_pep517_and_build_options(script, tmpdir, data, common_wheels):

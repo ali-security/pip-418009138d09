@@ -323,7 +323,9 @@ def test_git_with_editable_where_egg_contains_dev_string(script, tmpdir):
     """
     url_path = 'dcramer/django-devserver.git'
     local_url = _github_checkout(
-        url_path, tmpdir, egg='django-devserver', scheme='git',
+        # scheme was 'git': GitHub shut down the git:// protocol (port 9418)
+        # in January 2022, so the anonymous git transport can no longer clone.
+        url_path, tmpdir, egg='django-devserver', scheme='https',
     )
     result = script.pip('install', '-e', local_url)
     result.assert_installed('django-devserver', with_files=['.git'])
@@ -337,7 +339,9 @@ def test_git_with_non_editable_where_egg_contains_dev_string(script, tmpdir):
     """
     url_path = 'dcramer/django-devserver.git'
     local_url = _github_checkout(
-        url_path, tmpdir, egg='django-devserver', scheme='git',
+        # scheme was 'git': GitHub shut down the git:// protocol (port 9418)
+        # in January 2022, so the anonymous git transport can no longer clone.
+        url_path, tmpdir, egg='django-devserver', scheme='https',
     )
     result = script.pip('install', local_url)
     devserver_folder = script.site_packages / 'devserver'

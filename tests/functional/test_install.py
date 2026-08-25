@@ -745,7 +745,9 @@ def test_install_using_install_option_and_editable(script, tmpdir):
     """
     folder = 'script_folder'
     script.scratch_path.joinpath(folder).mkdir()
-    url = 'git+git://github.com/pypa/pip-test-package'
+    # git+git:// -> git+https://: GitHub shut down the git:// protocol
+    # (port 9418) in January 2022, so anonymous git transport can't clone.
+    url = 'git+https://github.com/pypa/pip-test-package'
     result = script.pip(
         'install', '-e', '{url}#egg=pip-test-package'
         .format(url=local_checkout(url, tmpdir)),

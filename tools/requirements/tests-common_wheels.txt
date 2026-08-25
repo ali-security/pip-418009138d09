@@ -5,7 +5,14 @@
 # 4. Replacing the `setuptools` entry below with a `file:///...` URL
 # (Adjust artifact directory used based on preference and operating system)
 
-setuptools >= 40.8.0
-wheel
+# A RANGE, not a pin, so each leg resolves the newest setuptools it supports:
+# py2.7 -> 44.1.1, py3.5 -> 50.3.2, py3.6+ -> 51.3.3.  These build every
+# fixture package, so their versions are observable in assertions: setuptools
+# >= 52 normalises metadata directory names (fspkg-0.1.dev0.dist-info instead
+# of the asserted FSPkg-0.1.dev0), which breaks test_install.py's
+# curdir/pardir/local-directory/url-case tests, test_install_reqs.py's
+# test_requirements_file and test_uninstall.py's easy-install assertions.
+setuptools>=40.8.0,<52
+wheel==0.36.2
 # As required by pytest-cov.
 coverage >= 4.4

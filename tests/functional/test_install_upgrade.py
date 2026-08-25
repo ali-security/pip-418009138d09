@@ -386,7 +386,9 @@ def test_upgrade_vcs_req_with_dist_found(script):
     req = (
         "{url}#egg=pretend".format(
             url=(
-                "git+git://github.com/alex/pretend@e7f26ad7dbcb4a02a4995aade4"
+                # git+git:// -> git+https://: GitHub shut down the git://
+                # protocol (port 9418) in January 2022.
+                "git+https://github.com/alex/pretend@e7f26ad7dbcb4a02a4995aade4"
                 "743aad47656b27"
             ),
         )

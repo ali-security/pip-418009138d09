@@ -1,18 +1,39 @@
 --use-feature=2020-resolver
-cryptography==2.8
+# Every atomicwrites release up to 1.4.0 was deleted from PyPI in 2022 and
+# 1.4.1 postdates the release-date index, so the py2 legs can only get it from
+# a direct URL -- without it pytest cannot be installed on Python 2.
+https://files.pythonhosted.org/packages/87/c6/53da25344e3e3a9c01095a89f16dbcda021c609ddb42dd6d7c0528236fb2/atomicwrites-1.4.1.tar.gz#egg=atomicwrites; python_version < '3'
+# cryptography 2.8 has no wheel for darwin-arm64 or win+cp39; the x509 builder
+# API tests/lib/certs.py uses is unchanged in later releases, so those
+# platforms take an unpinned cryptography.
+cryptography==2.8; sys_platform == 'linux' or python_version < '3.7'
+cryptography; sys_platform != 'linux' and python_version >= '3.7'
 csv23
 enum34; python_version < '3.4'
 freezegun
 mock
 pretend
-pytest
+# Bounded, not pinned: pytest 6.2.x dropped Python 3.5 (so the 3.5 leg lands on
+# 6.1.2 under this bound), and pytest 8 removed the nose-style setup/teardown
+# methods this suite still uses in tests/lib/options_helpers.py,
+# test_configuration.py, test_utils, test_req and test_utils_unpacking.
+pytest<6.3; python_version >= '3'
+# Unbounded, py2 backtracks to pytest 3.5.1, which lacks get_closest_marker --
+# conftest then raises at collection and zero tests run.
+pytest==4.6.11; python_version < '3'
 pytest-cov
-pytest-rerunfailures
+pytest-rerunfailures; python_version >= '3'
+pytest-rerunfailures==6.0; python_version < '3'
 pytest-timeout
-pytest-xdist
+pytest-xdist; python_version >= '3'
+pytest-xdist==1.34.0; python_version < '3'
 pyyaml
-scripttest
+# scripttest 2.0.0 declares `class TestFileEnvironment:` which is a classic
+# class on py2, so its super() call raises
+# "argument 1 must be type, not classobj".
+scripttest<2
 setuptools>=39.2.0  # Needed for `setuptools.wheel.Wheel` support.
-https://github.com/pypa/virtualenv/archive/legacy.zip#egg=virtualenv
+# The pypa/virtualenv `legacy` branch was deleted, so the archive URL 404s.
+virtualenv<20
 werkzeug==0.16.0
 wheel

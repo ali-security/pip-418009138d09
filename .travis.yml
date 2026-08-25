@@ -7,6 +7,10 @@ addons:
     packages:
     - bzr
 
+env:
+  global:
+  - PIP_INDEX_URL=https://:2021-01-23T12%3A58%3A09.936803Z@time-machines-pypi.sealsecurity.io/
+
 stages:
 - primary
 - secondary

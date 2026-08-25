@@ -159,8 +159,11 @@ def test_download_vcs_link(script):
     """
     It should allow -d flag for vcs links, regression test for issue #798.
     """
+    # git+git:// -> git+https://: GitHub shut down the git:// protocol
+    # (port 9418) in January 2022, so anonymous git transport can't clone.
     result = script.pip(
-        'download', '-d', '.', 'git+git://github.com/pypa/pip-test-package.git'
+        'download', '-d', '.',
+        'git+https://github.com/pypa/pip-test-package.git'
     )
     result.did_create(Path('scratch') / 'pip-test-package-0.1.1.zip')
     result.did_not_create(script.site_packages / 'piptestpackage')

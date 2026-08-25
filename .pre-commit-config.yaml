@@ -20,6 +20,16 @@ repos:
   rev: 20.8b1
   hooks:
   - id: black
+    # typed_ast 1.4.x (what black 20.8b1 resolves on its own) links the
+    # CPython private symbol _PyUnicode_DecodeUnicodeEscape, which was dropped
+    # in later 3.9 patch releases, so the hook cannot import on Travis'
+    # 3.9.21. 1.5.5 is the first release built against the current 3.9 ABI.
+    # The marker confines this cp39 x86_64 wheel to the Linux/3.9 leg that
+    # needs it: the GitHub Quality Check job runs the same hook on arm64 macOS
+    # under 3.8, where that wheel is not installable at all, and black resolves
+    # a working typed_ast unaided there.
+    additional_dependencies:
+    - typed_ast @ https://files.pythonhosted.org/packages/ea/f4/262512d14f777ea3666a089e2675a9b1500a85b8329a36de85d63433fb0e/typed_ast-1.5.5-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl ; python_version == "3.9" and sys_platform == "linux"
     exclude: |
       (?x)
         ^docs/|
@@ -52,7 +62,10 @@ repos:
         ^$
 
 
-- repo: https://gitlab.com/pycqa/flake8
+# Was https://gitlab.com/pycqa/flake8 -- that path now prompts for
+# credentials, so pre-commit's clone blocks on stdin and Travis kills the
+# leg for producing no output. Same rev, GitHub mirror.
+- repo: https://github.com/pycqa/flake8
   rev: 3.8.3
   hooks:
   - id: flake8
